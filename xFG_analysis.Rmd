@@ -1,0 +1,498 @@
+---
+title: "Expected Field Goal Percentage"
+author: "Matt Johnson"
+date: "June 2020"
+output: 
+  html_notebook:
+    theme: paper
+    code_folding: hide
+---
+
+The objective of this project is to develop a model for expected field goal percentage based on distance and weather conditions when available. Data comes from the `nflfastr` package between the 2010 and 2019 seasons.
+
+```{r, message=FALSE, warning=FALSE}
+## Expected Field Goal Percentage
+options(dplyr.summarise.inform=F)
+
+# Load Packages
+library(nflscrapR)
+library(nflfastR)
+library(tidyverse)
+library(mgcv)
+library(lme4)
+library(DT)
+
+# Load data
+seasons <- 2000:2019
+pbp <- purrr::map_df(seasons, function(x) {
+  readRDS(
+    url(
+      glue::glue("https://raw.githubusercontent.com/guga31bb/nflfastR-data/master/data/play_by_play_{x}.rds")
+    )
+  )
+})
+
+# Clean data
+kick <- pbp %>% 
+  filter((extra_point_attempt == 1 | field_goal_attempt == 1) & season >= 2010) %>% 
+  mutate(kick_attempt = ifelse(extra_point_attempt == 1 | field_goal_attempt == 1, 1, 0),
+         kick_result = ifelse(extra_point_attempt == 1, extra_point_result, field_goal_result),
+         points_scored = score_differential_post - score_differential,
+         kick_success = ifelse(points_scored > 0, 1, 0),
+         roof = ifelse(roof %in% c("dome", "closed"), 1, 0),
+         wind = ifelse(is.na(wind) == T, 0, wind),
+         wind_rs = wind/max(wind),
+         temp = ifelse(is.na(temp) == T, 75, temp),
+         rain_snow = case_when(
+           str_detect(weather, "^0% Chance of Rain") == T ~ 0,
+           str_detect(weather, "Zero Percent Chance of Rain") == T ~ 0,
+           str_detect(weather, "No chance of rain") == T ~ 0,
+           str_detect(weather, "Rain") == T ~ 1,
+           str_detect(weather, "rain") == T ~ 1,
+           str_detect(weather, "Snow") == T ~ 1,
+           str_detect(weather, "snow") == T ~ 1,
+           T ~ 0,
+         ),
+         dist_rs = (kick_distance - min(kick_distance))/(max(kick_distance) - min(kick_distance)),
+         season = as.factor(season)) %>% 
+  select(kicker_player_name, kicker_player_id, kick_attempt, kick_success, kick_distance, roof, surface, temp, wind, wind_rs, dist_rs, rain_snow, weather, season)
+
+set.seed(123)
+kick <- kick[sample(nrow(kick)),]
+
+train <- kick %>% head(dim(kick)[1]*.9)
+test <- kick %>% tail(dim(kick)[1]*.1)
+```
+
+## Model Design & Validation {.tabset .tabset-pills}
+
+In order to model the likelihood of a successful kick, I will use a generalized additive model. This model is similar in nature to a linear regression model with the primary difference coming in using a binomial family rather than a Gaussian family. This requires a link function to transform the model's results into a probability between 0 and 1. In this case, a "logit" function is appropriate.  
+
+In order to test various variables and building the model, the data set is split into training and testing data. There are four different formulas that will be tested.  
+  
+  * Distance only
+  * Smoothed distance only
+  * Distance + weather conditions  
+  * Distance + weather + season  
+  
+Variable Definition:  
+  
+  * `kick_distance`: distance, in yards, of the kick attempt
+  * `wind`: speed, in mph, of the wind; domed stadiums have wind set equal to 0  
+  * `rain_snow`: indicator variable for whether there was precipitation (rain or snow) in forecast; incomplete data for all games  
+  * `season`: year which kick is attempted
+    
+For model selection, we are focusing on two things, the accuracy of the model, as measured by a Brier Score, and the consistency of the model. The consistency is tested by looking at whether the model is calibrated for all probabilities and distances. The model is not ideal if it is accurate for a portion of the probabilities, but not all of it.  
+  
+The differences in out-of-sample accuracy are fairly small, ranging from .1411 to .1428. The most accurate model was the full model with distance, weather, and season.  
+  
+For calibration, we can look at a couple different things. First, is calibration by distance. Does the expected success probability match the actual success rate observed for a given distance? For the case of the full model where we are including more than just distance, we have to include constants for the other variables. I set `wind` = 0, `rain_snow` = 0, and `season` = 2019. Since we have no weather, we would expect the expected values to be a bit higher than the observed values where weather was a factor. The overall shape should still be similar.  
+  
+Next, we can check calibration by probability. Asking the question, does X% expected success actually translate to an X% success rate observation? There is a table displaying grouped averages by 5% increments. We would expected the `predicted` column to be equal to the `actual` column if the model is well calibrated. The graph also represents this data. The red line represents a perfect match. The blue line is a modeled relationship between predicted and actual with the grouped values plotted.
+  
+### Model 1  
+
+#### Model Summary
+  
+```{r}
+g1 <- gam(data = train, 
+            kick_success ~ kick_distance,
+            family = binomial("logit"))
+
+summary(g1)
+```
+
+As expected, `kick_distance` is a significant variable and decreases the probability of success with each added yard.
+
+#### Brier Score
+
+```{r}
+test <- test %>% 
+  mutate(prob = predict(g1, ., type = "response"))
+#Brier Score
+paste("The Brier score for Model 1 is", 
+      round(Metrics::mae(test$kick_success, test$prob), 4))
+```
+
+#### Calibration
+
+```{r}
+#Validation
+kick_group <- test %>% 
+  group_by(kick_distance) %>% 
+  summarise(success = mean(kick_success), n = n()) %>% 
+  ungroup() %>% 
+  mutate(wind = 0,
+         season = 2019, 
+         rain_snow = 0) %>% 
+  mutate(prob = predict(g1, ., type = "response"))
+
+ggplot(data = kick_group, aes(x = kick_distance)) +
+  geom_line(aes(y = success, color = "Actual")) +
+  geom_line(aes(y = prob, color = "Model")) +
+  labs(color = "Probability",
+       title = "Success by Kick Distance")
+
+validation <- test %>% 
+  mutate(group = case_when(
+    between(prob, .95, 1) ~ "95-100",
+    between(prob, .90,.95) ~ "90-95",
+    between(prob, .85,.90) ~ "85-90",
+    between(prob, .80,.85) ~ "80-85",
+    between(prob, .75,.80) ~ "75-80",
+    between(prob, .70,.75) ~ "70-75",
+    between(prob, .65,.70) ~ "65-70",
+    between(prob, .60,.65) ~ "60-65",
+    between(prob, .55,.60) ~ "55-60",
+    between(prob, .0,.55) ~ "0-55"
+  )) %>% 
+  group_by(group) %>% 
+  summarise(
+    kicks = n(),
+    actual = mean(kick_success),
+    predicted = mean(prob)
+  ) %>% 
+  ungroup() %>% 
+  arrange(desc(predicted))
+
+datatable(validation,
+          rownames = FALSE,
+          options = list(
+            dom = 't',
+            columnDefs = list(list(className = 'dt-center', targets = 0:3))
+          )) %>% 
+  formatRound(3:4, digits = 2)
+
+ggplot() +
+  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1)) +
+  labs(title = "xFG% vs. Observed FG%",
+       x = "xFG%",
+       y = "Observed FG%")
+```
+
+Over-estimates ~75-90% and under-estimates values under 75%.
+
+### Model 2  
+  
+#### Model Summary  
+  
+```{r}
+g2 <- gam(data = train, 
+            kick_success ~ s(kick_distance),
+            family = binomial("logit"))
+
+summary(g2)
+```
+
+#### Brier Score
+
+```{r}
+test <- test %>% 
+  mutate(prob = predict(g2, ., type = "response"))
+# Brier Score
+paste("The Brier score for Model 2 is", 
+      round(Metrics::mae(test$kick_success, test$prob), 4))
+```
+
+#### Calibration
+
+```{r}
+#Validation
+kick_group <- test %>% 
+  group_by(kick_distance) %>% 
+  summarise(success = mean(kick_success), n = n()) %>% 
+  ungroup() %>% 
+  mutate(wind = 0,
+         season = 2019, 
+         rain_snow = 0) %>% 
+  mutate(prob = predict(g2, ., type = "response"))
+
+ggplot(data = kick_group, aes(x = kick_distance)) +
+  geom_line(aes(y = success, color = "Actual")) +
+  geom_line(aes(y = prob, color = "Model")) +
+  labs(color = "Probability",
+       title = "Success by Kick Distance")
+
+validation <- test %>% 
+  mutate(group = case_when(
+    between(prob, .95, 1) ~ "95-100",
+    between(prob, .90,.95) ~ "90-95",
+    between(prob, .85,.90) ~ "85-90",
+    between(prob, .80,.85) ~ "80-85",
+    between(prob, .75,.80) ~ "75-80",
+    between(prob, .70,.75) ~ "70-75",
+    between(prob, .65,.70) ~ "65-70",
+    between(prob, .60,.65) ~ "60-65",
+    between(prob, .55,.60) ~ "55-60",
+    between(prob, .0,.55) ~ "0-55"
+  )) %>% 
+  group_by(group) %>% 
+  summarise(
+    kicks = n(),
+    actual = mean(kick_success),
+    predicted = mean(prob)
+  ) %>% 
+  ungroup() %>% 
+  arrange(desc(predicted))
+
+datatable(validation,
+          rownames = FALSE,
+          options = list(
+            dom = 't',
+            columnDefs = list(list(className = 'dt-center', targets = 0:3))
+          )) %>% 
+  formatRound(3:4, digits = 2)
+
+ggplot() +
+  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1))  +
+  labs(title = "xFG% vs. Observed FG%",
+       x = "xFG%",
+       y = "Observed FG%")
+```
+
+This model is very well calibrated for all xFG%.
+
+### Model 3  
+
+#### Model Summary
+  
+```{r}
+g3 <- gam(data = train, 
+            kick_success ~ kick_distance + wind + rain_snow,
+            family = binomial("logit"))
+
+summary(g3)
+```
+
+As before, kick distance moves in the expected direction where a further distance decreases the probability of success. Introducing wind and precipitation, these variables also decrease the probability of success as they increase. This also matches our prior expectation.
+
+#### Brier Score
+
+```{r}
+test <- test %>% 
+  mutate(prob = predict(g3, ., type = "response"))
+# Brier Score
+paste("The Brier score for Model 3 is", 
+      round(Metrics::mae(test$kick_success, test$prob), 4))
+```
+
+#### Calibration
+
+```{r}
+#Validation
+kick_group <- test %>% 
+  group_by(kick_distance) %>% 
+  summarise(success = mean(kick_success), n = n()) %>% 
+  ungroup() %>% 
+  mutate(wind = 0,
+         season = 2019, 
+         rain_snow = 0) %>% 
+  mutate(prob = predict(g3, ., type = "response"))
+
+ggplot(data = kick_group, aes(x = kick_distance)) +
+  geom_line(aes(y = success, color = "Actual")) +
+  geom_line(aes(y = prob, color = "Model")) +
+  labs(color = "Probability",
+       title = "Success by Kick Distance")
+
+validation <- test %>% 
+  mutate(group = case_when(
+    between(prob, .95, 1) ~ "95-100",
+    between(prob, .90,.95) ~ "90-95",
+    between(prob, .85,.90) ~ "85-90",
+    between(prob, .80,.85) ~ "80-85",
+    between(prob, .75,.80) ~ "75-80",
+    between(prob, .70,.75) ~ "70-75",
+    between(prob, .65,.70) ~ "65-70",
+    between(prob, .60,.65) ~ "60-65",
+    between(prob, .55,.60) ~ "55-60",
+    between(prob, .0,.55) ~ "0-55"
+  )) %>% 
+  group_by(group) %>% 
+  summarise(
+    kicks = n(),
+    actual = mean(kick_success),
+    predicted = mean(prob)
+  ) %>% 
+  ungroup() %>% 
+  arrange(desc(predicted))
+
+datatable(validation,
+          rownames = FALSE,
+          options = list(
+            dom = 't',
+            columnDefs = list(list(className = 'dt-center', targets = 0:3))
+          )) %>% 
+  formatRound(3:4, digits = 2)
+
+ggplot() +
+  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1))  +
+  labs(title = "xFG% vs. Observed FG%",
+       x = "xFG%",
+       y = "Observed FG%")
+```
+
+This model is also fairly well calibrated with a slight over-estimation with xFG% between 0.7 and 0.9 and under-estimation when xFG% less than 0.7.
+
+### Model 4
+
+#### Model Summary
+  
+```{r}
+g4 <- gam(data = train, 
+            kick_success ~ kick_distance + wind + rain_snow + season + 0,
+            family = binomial("logit"))
+
+summary(g4)
+```
+
+There are slight differences between seasons which are used to establish the intercept for each year. Distance and weather still hold their direction and match our priors.
+
+#### Brier Score
+
+```{r}
+test <- test %>% 
+  mutate(prob = predict(g4, ., type = "response"))
+paste("The Brier score for Model 4 is", 
+      round(Metrics::mae(test$kick_success, test$prob), 4))
+```
+
+Lowest Brier Score of the group
+
+#### Calibration
+
+```{r}
+#Validation
+kick_group <- test %>% 
+  group_by(kick_distance) %>% 
+  summarise(success = mean(kick_success), n = n()) %>% 
+  ungroup() %>% 
+  mutate(wind = 0,
+         season = 2019, 
+         rain_snow = 0) %>% 
+  mutate(prob = predict(g4, ., type = "response"))
+
+ggplot(data = kick_group, aes(x = kick_distance)) +
+  geom_line(aes(y = success, color = "Actual")) +
+  geom_line(aes(y = prob, color = "Model")) +
+  labs(color = "Probability",
+       title = "Success by Kick Distance")
+
+validation <- test %>% 
+  mutate(group = case_when(
+    between(prob, .95, 1) ~ "95-100",
+    between(prob, .90,.95) ~ "90-95",
+    between(prob, .85,.90) ~ "85-90",
+    between(prob, .80,.85) ~ "80-85",
+    between(prob, .75,.80) ~ "75-80",
+    between(prob, .70,.75) ~ "70-75",
+    between(prob, .65,.70) ~ "65-70",
+    between(prob, .60,.65) ~ "60-65",
+    between(prob, .55,.60) ~ "55-60",
+    between(prob, .0,.55) ~ "0-55"
+  )) %>% 
+  group_by(group) %>% 
+  summarise(
+    kicks = n(),
+    actual = mean(kick_success),
+    predicted = mean(prob)
+  ) %>% 
+  ungroup() %>% 
+  arrange(desc(predicted))
+
+datatable(validation,
+          rownames = FALSE,
+          options = list(
+            dom = 't',
+            columnDefs = list(list(className = 'dt-center', targets = 0:3))
+          )) %>% 
+  formatRound(3:4, digits = 2)
+
+ggplot() +
+  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
+  geom_abline(slope = 1, intercept = 0, color = "red") + 
+  coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1))  +
+  labs(title = "xFG% vs. Observed FG%",
+       x = "xFG%",
+       y = "Observed FG%")
+```
+
+Well calibrated with some differences in residuals, particularly when we have fewer observations on the left end of the graph.
+
+## Results
+
+This model does not consider who the kicker is attempting the kick. This allows us to evaluate individual kickers compared to their peers.
+
+```{r, warning = FALSE}
+kickers <- kick %>% 
+  mutate(kick_prob = predict(g4, ., type = "response")) %>% 
+  group_by(kicker_player_name) %>% 
+  summarise(
+    kicks = n(),
+    success_rate = round(mean(kick_success),3),
+    pred_rate = round(mean(kick_prob),3)
+  ) %>% 
+  ungroup() %>% 
+  mutate(diff = round(success_rate - pred_rate,3)) %>% 
+  filter(kicks >= 50) %>% 
+  rename(kicker = kicker_player_name) %>% 
+  arrange(-diff)
+
+datatable(kickers,
+          rownames = FALSE,
+          options = list(
+            columnDefs = list(list(className = 'dt-center', targets = 0:4))
+          ))
+
+```
+
+
+## other stuff
+```{r}
+# Split into training and testing data
+set.seed(12)
+kick <- kick[sample(nrow(kick)),]
+
+train <- kick %>% head(dim(kick)[1]*.9)
+test <- kick %>% tail(dim(kick)[1]*.1)
+
+### GAM
+
+gam1 <- gam(data = train, 
+            kick_success ~ kick_distance + wind + rain_snow + season + 0,
+            family = binomial("logit"))
+
+### GLMER
+
+glmer1 <- glmer(data = train, 
+                kick_success ~ dist_rs + wind_rs + rain_snow + (1|kicker_player_name) + season + 0,
+                family = binomial,
+                control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+```
+
+```{r}
+arm::display(glmer1)
+summary(glmer1)
+```
+
+```{r}
+test <- test %>% 
+  mutate(kick_prob_gam = predict(gam1, ., type = "response")) %>% 
+  mutate(kick_prob_glmer = predict(glmer1, ., type = "response", allow.new.levels = T))
+
+Metrics::mae(test$kick_success, test$kick_prob_gam)
+Metrics::mae(test$kick_success, test$kick_prob_glmer)
+```
+
+
+
