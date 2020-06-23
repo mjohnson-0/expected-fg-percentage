@@ -23,7 +23,7 @@ library(lme4)
 library(DT)
 
 # Load data
-seasons <- 2000:2019
+seasons <- 2010:2019
 pbp <- purrr::map_df(seasons, function(x) {
   readRDS(
     url(
@@ -34,7 +34,7 @@ pbp <- purrr::map_df(seasons, function(x) {
 
 # Clean data
 kick <- pbp %>% 
-  filter((extra_point_attempt == 1 | field_goal_attempt == 1) & season >= 2010) %>% 
+  filter((extra_point_attempt == 1 | field_goal_attempt == 1)) %>% 
   mutate(kick_attempt = ifelse(extra_point_attempt == 1 | field_goal_attempt == 1, 1, 0),
          kick_result = ifelse(extra_point_attempt == 1, extra_point_result, field_goal_result),
          points_scored = score_differential_post - score_differential,
@@ -57,7 +57,7 @@ kick <- pbp %>%
          season = as.factor(season)) %>% 
   select(kicker_player_name, kicker_player_id, kick_attempt, kick_success, kick_distance, roof, surface, temp, wind, wind_rs, dist_rs, rain_snow, weather, season)
 
-set.seed(123)
+set.seed(999)
 kick <- kick[sample(nrow(kick)),]
 
 train <- kick %>% head(dim(kick)[1]*.9)
@@ -68,27 +68,25 @@ test <- kick %>% tail(dim(kick)[1]*.1)
 
 In order to model the likelihood of a successful kick, I will use a generalized additive model. This model is similar in nature to a linear regression model with the primary difference coming in using a binomial family rather than a Gaussian family. This requires a link function to transform the model's results into a probability between 0 and 1. In this case, a "logit" function is appropriate.  
 
-In order to test various variables and building the model, the data set is split into training and testing data. There are four different formulas that will be tested.  
+In order to test various variables and building the model, the data set is split into training and testing data. There are three different formulas that will be tested.  
   
   * Distance only
   * Smoothed distance only
-  * Distance + weather conditions  
-  * Distance + weather + season  
+  * Distance + weather conditions
   
 Variable Definition:  
   
   * `kick_distance`: distance, in yards, of the kick attempt
   * `wind`: speed, in mph, of the wind; domed stadiums have wind set equal to 0  
   * `rain_snow`: indicator variable for whether there was precipitation (rain or snow) in forecast; incomplete data for all games  
-  * `season`: year which kick is attempted
-    
+
 For model selection, we are focusing on two things, the accuracy of the model, as measured by a Brier Score, and the consistency of the model. The consistency is tested by looking at whether the model is calibrated for all probabilities and distances. The model is not ideal if it is accurate for a portion of the probabilities, but not all of it.  
   
-The differences in out-of-sample accuracy are fairly small, ranging from .1411 to .1428. The most accurate model was the full model with distance, weather, and season.  
+The differences in out-of-sample accuracy are fairly small, ranging from .1406 to .1426. The most accurate model was the full model with distance and weather.  
   
-For calibration, we can look at a couple different things. First, is calibration by distance. Does the expected success probability match the actual success rate observed for a given distance? For the case of the full model where we are including more than just distance, we have to include constants for the other variables. I set `wind` = 0, `rain_snow` = 0, and `season` = 2019. Since we have no weather, we would expect the expected values to be a bit higher than the observed values where weather was a factor. The overall shape should still be similar.  
+For calibration, we can look at a couple different things. First, is calibration by distance. Does the expected success probability match the actual success rate observed for a given distance? For the case of the full model where we are including more than just distance, we have to include constants for the other variables. I set `wind` = 0 and `rain_snow` = 0.. Since we have no weather, we would expect the expected values to be a bit higher than the observed values where weather was a factor. The overall shape should still be similar.  
   
-Next, we can check calibration by probability. Asking the question, does X% expected success actually translate to an X% success rate observation? There is a table displaying grouped averages by 5% increments. We would expected the `predicted` column to be equal to the `actual` column if the model is well calibrated. The graph also represents this data. The red line represents a perfect match. The blue line is a modeled relationship between predicted and actual with the grouped values plotted.
+Next, we can check calibration by probability. Asking the question, does X% expected success actually translate to an X% success rate in observation? There is a table displaying grouped averages by 5% increments. We would expected the `predicted` column to be equal to the `actual` column if the model is well calibrated. The graph also represents this data. The red line represents a perfect match. The blue line is a modeled relationship between predicted and actual with the grouped values plotted.
   
 ### Model 1  
 
@@ -122,9 +120,6 @@ kick_group <- test %>%
   group_by(kick_distance) %>% 
   summarise(success = mean(kick_success), n = n()) %>% 
   ungroup() %>% 
-  mutate(wind = 0,
-         season = 2019, 
-         rain_snow = 0) %>% 
   mutate(prob = predict(g1, ., type = "response"))
 
 ggplot(data = kick_group, aes(x = kick_distance)) +
@@ -164,7 +159,7 @@ datatable(validation,
   formatRound(3:4, digits = 2)
 
 ggplot() +
-  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_smooth(data = test, aes(x = prob, y = kick_success)) +
   geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
   geom_abline(slope = 1, intercept = 0, color = "red") + 
   coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1)) +
@@ -172,8 +167,6 @@ ggplot() +
        x = "xFG%",
        y = "Observed FG%")
 ```
-
-Over-estimates ~75-90% and under-estimates values under 75%.
 
 ### Model 2  
   
@@ -205,9 +198,6 @@ kick_group <- test %>%
   group_by(kick_distance) %>% 
   summarise(success = mean(kick_success), n = n()) %>% 
   ungroup() %>% 
-  mutate(wind = 0,
-         season = 2019, 
-         rain_snow = 0) %>% 
   mutate(prob = predict(g2, ., type = "response"))
 
 ggplot(data = kick_group, aes(x = kick_distance)) +
@@ -247,7 +237,7 @@ datatable(validation,
   formatRound(3:4, digits = 2)
 
 ggplot() +
-  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
+  geom_smooth(data = test, aes(x = prob, y = kick_success)) +
   geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
   geom_abline(slope = 1, intercept = 0, color = "red") + 
   coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1))  +
@@ -255,8 +245,6 @@ ggplot() +
        x = "xFG%",
        y = "Observed FG%")
 ```
-
-This model is very well calibrated for all xFG%.
 
 ### Model 3  
 
@@ -291,7 +279,6 @@ kick_group <- test %>%
   summarise(success = mean(kick_success), n = n()) %>% 
   ungroup() %>% 
   mutate(wind = 0,
-         season = 2019, 
          rain_snow = 0) %>% 
   mutate(prob = predict(g3, ., type = "response"))
 
@@ -341,101 +328,16 @@ ggplot() +
        y = "Observed FG%")
 ```
 
-This model is also fairly well calibrated with a slight over-estimation with xFG% between 0.7 and 0.9 and under-estimation when xFG% less than 0.7.
+This model is fairly well calibrated with a slight over-estimation with xFG% between 0.7 and 0.85 and under-estimation when xFG% less than 0.7.
 
-### Model 4
-
-#### Model Summary
-  
-```{r}
-g4 <- gam(data = train, 
-            kick_success ~ kick_distance + wind + rain_snow + season + 0,
-            family = binomial("logit"))
-
-summary(g4)
-```
-
-There are slight differences between seasons which are used to establish the intercept for each year. Distance and weather still hold their direction and match our priors.
-
-#### Brier Score
-
-```{r}
-test <- test %>% 
-  mutate(prob = predict(g4, ., type = "response"))
-paste("The Brier score for Model 4 is", 
-      round(Metrics::mae(test$kick_success, test$prob), 4))
-```
-
-Lowest Brier Score of the group
-
-#### Calibration
-
-```{r}
-#Validation
-kick_group <- test %>% 
-  group_by(kick_distance) %>% 
-  summarise(success = mean(kick_success), n = n()) %>% 
-  ungroup() %>% 
-  mutate(wind = 0,
-         season = 2019, 
-         rain_snow = 0) %>% 
-  mutate(prob = predict(g4, ., type = "response"))
-
-ggplot(data = kick_group, aes(x = kick_distance)) +
-  geom_line(aes(y = success, color = "Actual")) +
-  geom_line(aes(y = prob, color = "Model")) +
-  labs(color = "Probability",
-       title = "Success by Kick Distance")
-
-validation <- test %>% 
-  mutate(group = case_when(
-    between(prob, .95, 1) ~ "95-100",
-    between(prob, .90,.95) ~ "90-95",
-    between(prob, .85,.90) ~ "85-90",
-    between(prob, .80,.85) ~ "80-85",
-    between(prob, .75,.80) ~ "75-80",
-    between(prob, .70,.75) ~ "70-75",
-    between(prob, .65,.70) ~ "65-70",
-    between(prob, .60,.65) ~ "60-65",
-    between(prob, .55,.60) ~ "55-60",
-    between(prob, .0,.55) ~ "0-55"
-  )) %>% 
-  group_by(group) %>% 
-  summarise(
-    kicks = n(),
-    actual = mean(kick_success),
-    predicted = mean(prob)
-  ) %>% 
-  ungroup() %>% 
-  arrange(desc(predicted))
-
-datatable(validation,
-          rownames = FALSE,
-          options = list(
-            dom = 't',
-            columnDefs = list(list(className = 'dt-center', targets = 0:3))
-          )) %>% 
-  formatRound(3:4, digits = 2)
-
-ggplot() +
-  geom_smooth(data = test, aes(x =prob, y = kick_success)) +
-  geom_point(data = validation, aes(x = predicted, y = actual, size = kicks)) +
-  geom_abline(slope = 1, intercept = 0, color = "red") + 
-  coord_cartesian(xlim = c(0.3, 1), ylim = c(0.3, 1))  +
-  labs(title = "xFG% vs. Observed FG%",
-       x = "xFG%",
-       y = "Observed FG%")
-```
-
-Well calibrated with some differences in residuals, particularly when we have fewer observations on the left end of the graph.
 
 ## Results
 
-This model does not consider who the kicker is attempting the kick. This allows us to evaluate individual kickers compared to their peers.
+This model does not consider who the kicker is attempting the kick. This allows us to evaluate individual kickers compared to their peers. The simplest way of doing this is by finding the difference between the predicted success rate for the kicker and their actual success rate. This metric will be called FOX (field goal over expectation). The better kickers will out-perform their expectations and have a positive FOX score. The table below is filtered down to players with a minimum of 50 kick attempts.
 
 ```{r, warning = FALSE}
 kickers <- kick %>% 
-  mutate(kick_prob = predict(g4, ., type = "response")) %>% 
+  mutate(kick_prob = predict(g3, ., type = "response")) %>% 
   group_by(kicker_player_name) %>% 
   summarise(
     kicks = n(),
@@ -443,10 +345,10 @@ kickers <- kick %>%
     pred_rate = round(mean(kick_prob),3)
   ) %>% 
   ungroup() %>% 
-  mutate(diff = round(success_rate - pred_rate,3)) %>% 
+  mutate(FOX = round(success_rate - pred_rate,3)) %>% 
   filter(kicks >= 50) %>% 
   rename(kicker = kicker_player_name) %>% 
-  arrange(-diff)
+  arrange(-FOX)
 
 datatable(kickers,
           rownames = FALSE,
@@ -456,43 +358,82 @@ datatable(kickers,
 
 ```
 
+Unsurprisingly, Justin Tucker shows up as the best kicker, making 6.0% more kicks than expected based on the distance and conditions. Badgley, Bryant, Lutz, and Butker round out the top 5. Badgley has much fewer attempts than the rest of the kickers at the top of the list so there is a potential his performance regresses more than the others. I will show another way to compare kickers shortly using a different method.    
+  
+We can also sort the difference from least to greatest and find out who under-performed their expectations the most. Second round draft pick Roberto Aguayo  shows up as the worst kicker by this measure, missing his expected field goal percentage by 8.4%. Sam Ficken, Matt Gay, Austin Seibert, and Eddie Pineiro are active kickers who appear in the bottom 10.  
 
-## other stuff
 ```{r}
-# Split into training and testing data
-set.seed(12)
-kick <- kick[sample(nrow(kick)),]
+ggplot(data = kickers) +
+  geom_histogram(aes(x = FOX), breaks = seq(-0.09, 0.06, 0.005)) + 
+  scale_y_continuous(name = "Count", breaks = seq(0,10,2)) +
+  scale_x_continuous(breaks = seq(-0.08, 0.06, 0.02)) +
+  labs(title = "Distribution of FOX",
+       x = "FOX")
+```
+  
+The distribution shows that the average kicker underperforms his expected field goal percentage. Since our level of analysis is at the kicker level, rather than the kick level, this makes sense. The better kickers remain in the league longer, while the poor kickers get cycled through quicker. These leads to many more "below average" kickers than "above average."  
 
-train <- kick %>% head(dim(kick)[1]*.9)
-test <- kick %>% tail(dim(kick)[1]*.1)
+## Kicker Effect Model
 
-### GAM
+The previous model was unaware of who the kicker was when predicting the success of a kick. As we just saw in the results, the kicker matters. Justin Tucker kicking a 45 yard field goal has a different expectation than Roberto Aguayo. Using a generalized linear mixed-effect model, we can include a random effect for each kicker. As I mentioned regarding Michael Badgley, this model will include regression to the mean for each player. This will have a more significant effect on players with a couple years of experience than someone like Matt Bryant who has played over the entire sample.    
 
-gam1 <- gam(data = train, 
-            kick_success ~ kick_distance + wind + rain_snow + season + 0,
-            family = binomial("logit"))
-
-### GLMER
-
+```{r}
 glmer1 <- glmer(data = train, 
-                kick_success ~ dist_rs + wind_rs + rain_snow + (1|kicker_player_name) + season + 0,
+                kick_success ~ wind_rs + rain_snow + dist_rs + (1|kicker_player_name),
                 family = binomial,
                 control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-```
 
-```{r}
 arm::display(glmer1)
-summary(glmer1)
-```
 
-```{r}
 test <- test %>% 
-  mutate(kick_prob_gam = predict(gam1, ., type = "response")) %>% 
+  mutate(kick_prob_gam = predict(g3, ., type = "response")) %>% 
   mutate(kick_prob_glmer = predict(glmer1, ., type = "response", allow.new.levels = T))
 
-Metrics::mae(test$kick_success, test$kick_prob_gam)
-Metrics::mae(test$kick_success, test$kick_prob_glmer)
+
+paste("The Brier score for the GAM is", 
+      round(Metrics::mae(test$kick_success, test$kick_prob_gam), 4))
+paste("The Brier score for the GLMER is", 
+      round(Metrics::mae(test$kick_success, test$kick_prob_glmer), 4))
+
 ```
 
+As before we see the same consistency as the GAM when it comes to coefficient direction, more wind, precipitation, and further distance all contribute to more difficult kicks. For this model, wind speed and kick distance were rescaled to a 0 to 1 scale, something the GLMER model handles better but doesn't change the actual results. For the accuracy, including the player effect improved the accuracy of the model for the out of sample test group compared to the best GAM.  
+  
+For this model, the kicker was included as a random effect for the intercept. The following table displays the adjustment applied to the Intercept for each kicker. Positive values will have a higher success probability on a kick, all else equal. The FOX (Field goal over expectation) is included for comparison. 
 
+```{r}
+kick_ranef <- as.data.frame(ranef(glmer1)) %>% 
+  select(kicker = grp, Intercept = condval) %>% 
+  mutate(Intercept = round(Intercept, 3)) %>% 
+  arrange(desc(Intercept)) %>% 
+  inner_join(kickers, by = "kicker") %>% 
+  select(kicker, kicks, Intercept, FOX)
 
+datatable(kick_ranef,
+          rownames = FALSE,
+          options = list(
+            columnDefs = list(list(className = 'dt-center', targets = 0:3))
+          ))
+```
+
+Again, Justin Tucker is the GOAT standing well above the rest. The following graphic highlights the difference in probability for a few key kickers from a given distance.
+
+```{r}
+kick_group_glmer <- kick %>% 
+  filter(kicker_player_name %in% c("J.Tucker", "N.Novak", "D.Akers", "M.Bryant")) %>% 
+  group_by(kick_distance, dist_rs, kicker_player_name) %>% 
+  filter(between(kick_distance, 19, 55)) %>% 
+  summarise(success = mean(kick_success), n = n()) %>% 
+  ungroup() %>% 
+  mutate(wind_rs = 0,
+         rain_snow = 0) %>% 
+  mutate(prob = predict(glmer1, ., type = "response"))
+
+ggplot(data = kick_group_glmer, aes(x = kick_distance)) +
+  geom_line(aes(y = prob, color = kicker_player_name)) +
+  labs(color = "Probability",
+       title = "Success by Kick Distance")
+```
+Between the best (Tucker) and worst (Akers) kickers, there is a ~17% difference in expectation for a 50 yard field goal. The crazy thing is there is about the same amount of difference between Tucker and the second best kicker (Bryant), as Bryant and an average kicker (Novak).  
+  
+This type of model is applicable in the team setting when it comes to in-game decision making. A team would be able to use this model to have an accurate expectation for their specific kicker when it comes to fourth down decision making, rather than just relying on a general model.
