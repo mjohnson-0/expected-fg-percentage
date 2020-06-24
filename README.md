@@ -11,5 +11,5 @@ Model building and analysis can be found in `~/Analysis/xFG_analysis.RMD`
 Production code for general model found in `~/Production/xfg_general.R`  
   * Produces xFG probabilities for all possible kick distances and weather conditions
   
-Production code for kicker specific model found in `~/Production/xfg_kciker_specific.R`  
+Production code for kicker specific model found in `~/Production/xfg_kicker_specific.R`  
   * Produces xFG probabilities for all possible kick distances and weather conditions for an individual kicker
