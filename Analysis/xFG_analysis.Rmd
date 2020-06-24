@@ -5,6 +5,8 @@ date: "June 2020"
 output: 
   html_notebook:
     theme: paper
+    toc: true
+    toc_float: true
     code_folding: hide
 ---
 
@@ -66,27 +68,27 @@ test <- kick %>% tail(dim(kick)[1]*.1)
 
 ## Model Design & Validation {.tabset .tabset-pills}
 
-In order to model the likelihood of a successful kick, I will use a generalized additive model. This model is similar in nature to a linear regression model with the primary difference coming in using a binomial family rather than a Gaussian family. This requires a link function to transform the model's results into a probability between 0 and 1. In this case, a "logit" function is appropriate.  
+In order to model the likelihood of a successful kick, I will use a generalized additive model. This model is similar in nature to a linear regression model with the primary difference being the use of a binomial family rather than a Gaussian family. This requires a link function to transform the model's results into a probability between 0 and 1. In this case, a "logit" function is appropriate.  
 
-In order to test various variables and building the model, the data set is split into training and testing data. There are three different formulas that will be tested.  
+In order to test various variables and build the model, the data set is split into training and testing data. There are three different formulas that will be tested.  
   
-  * Distance only
-  * Smoothed distance only
+  * Distance
+  * Smoothed distance
   * Distance + weather conditions
   
 Variable Definition:  
   
   * `kick_distance`: distance, in yards, of the kick attempt
   * `wind`: speed, in mph, of the wind; domed stadiums have wind set equal to 0  
-  * `rain_snow`: indicator variable for whether there was precipitation (rain or snow) in forecast; incomplete data for all games  
+  * `rain_snow`: indicator variable for whether there was precipitation (rain or snow) in forecast; incomplete data for some games  
 
 For model selection, we are focusing on two things, the accuracy of the model, as measured by a Brier Score, and the consistency of the model. The consistency is tested by looking at whether the model is calibrated for all probabilities and distances. The model is not ideal if it is accurate for a portion of the probabilities, but not all of it.  
   
 The differences in out-of-sample accuracy are fairly small, ranging from .1406 to .1426. The most accurate model was the full model with distance and weather.  
   
-For calibration, we can look at a couple different things. First, is calibration by distance. Does the expected success probability match the actual success rate observed for a given distance? For the case of the full model where we are including more than just distance, we have to include constants for the other variables. I set `wind` = 0 and `rain_snow` = 0.. Since we have no weather, we would expect the expected values to be a bit higher than the observed values where weather was a factor. The overall shape should still be similar.  
+For calibration, we can look at a couple different things. First, is calibration by distance. Does the expected success probability match the actual success rate observed for a given distance? For the case of the full model where we are including more than just distance, we have to include constants for the other variables. I set `wind` = 0 and `rain_snow` = 0. Since we have no weather, we would expect the expected values to be a bit higher than the observed values where weather was a factor. The overall shape should still be similar.  
   
-Next, we can check calibration by probability. Asking the question, does X% expected success actually translate to an X% success rate in observation? There is a table displaying grouped averages by 5% increments. We would expected the `predicted` column to be equal to the `actual` column if the model is well calibrated. The graph also represents this data. The red line represents a perfect match. The blue line is a modeled relationship between predicted and actual with the grouped values plotted.
+Next, we can check calibration by probability. Asking the question, does X% expected success actually translate to an X% success rate in observation? There is a table displaying grouped averages by 5% increments. We would expect the `predicted` column to be equal to the `actual` column if the model is well calibrated. The graph also represents this data. The red line represents a perfect match. The blue line is a modeled relationship between predicted and actual with the grouped values plotted.
   
 ### Model 1  
 
@@ -328,12 +330,12 @@ ggplot() +
        y = "Observed FG%")
 ```
 
-This model is fairly well calibrated with a slight over-estimation with xFG% between 0.7 and 0.85 and under-estimation when xFG% less than 0.7.
+This model is fairly well calibrated with a slight over-estimation with xFG% between 0.7 and 0.85 and under-estimation when xFG% less than 0.7. Based on accuracy and calibration, this model appears to be the best option.
 
 
 ## Results
 
-This model does not consider who the kicker is attempting the kick. This allows us to evaluate individual kickers compared to their peers. The simplest way of doing this is by finding the difference between the predicted success rate for the kicker and their actual success rate. This metric will be called FOX (field goal over expectation). The better kickers will out-perform their expectations and have a positive FOX score. The table below is filtered down to players with a minimum of 50 kick attempts.
+Since the model does not consider who is attempting the kick, we are able to evaluate individual kickers compared to their peers. The simplest way of doing this is by finding the difference between the predicted success rate for the kicker and their actual success rate. This metric will be called FOX (field goal over expectation). The better kickers will out-perform their expectations and have a positive FOX score. The table below is filtered down to players with a minimum of 50 kick attempts in the sample.
 
 ```{r, warning = FALSE}
 kickers <- kick %>% 
@@ -352,13 +354,14 @@ kickers <- kick %>%
 
 datatable(kickers,
           rownames = FALSE,
+          filter = "top",
           options = list(
             columnDefs = list(list(className = 'dt-center', targets = 0:4))
           ))
 
 ```
 
-Unsurprisingly, Justin Tucker shows up as the best kicker, making 6.0% more kicks than expected based on the distance and conditions. Badgley, Bryant, Lutz, and Butker round out the top 5. Badgley has much fewer attempts than the rest of the kickers at the top of the list so there is a potential his performance regresses more than the others. I will show another way to compare kickers shortly using a different method.    
+Unsurprisingly, Justin Tucker shows up as the best kicker, making 6.0% more kicks than expected based on the distance and weather conditions. Badgley, Bryant, Lutz, and Butker round out the top 5. Badgley has much fewer attempts than the rest of the kickers at the top of the list so there is a potential his performance regresses more than the others. I will show another way to compare kickers shortly using a different method that takes this into account.    
   
 We can also sort the difference from least to greatest and find out who under-performed their expectations the most. Second round draft pick Roberto Aguayo  shows up as the worst kicker by this measure, missing his expected field goal percentage by 8.4%. Sam Ficken, Matt Gay, Austin Seibert, and Eddie Pineiro are active kickers who appear in the bottom 10.  
 
@@ -399,7 +402,8 @@ paste("The Brier score for the GLMER is",
 
 As before we see the same consistency as the GAM when it comes to coefficient direction, more wind, precipitation, and further distance all contribute to more difficult kicks. For this model, wind speed and kick distance were rescaled to a 0 to 1 scale, something the GLMER model handles better but doesn't change the actual results. For the accuracy, including the player effect improved the accuracy of the model for the out of sample test group compared to the best GAM.  
   
-For this model, the kicker was included as a random effect for the intercept. The following table displays the adjustment applied to the Intercept for each kicker. Positive values will have a higher success probability on a kick, all else equal. The FOX (Field goal over expectation) is included for comparison. 
+For this model, the kicker was included as a random effect for the intercept. The following table displays the adjustment applied to the intercept for each kicker. Positive values will have a higher success probability on a kick, all else equal. The FOX (Field goal over expectation) is included for comparison. 
+
 
 ```{r}
 kick_ranef <- as.data.frame(ranef(glmer1)) %>% 
@@ -411,6 +415,7 @@ kick_ranef <- as.data.frame(ranef(glmer1)) %>%
 
 datatable(kick_ranef,
           rownames = FALSE,
+          filter = "top",
           options = list(
             columnDefs = list(list(className = 'dt-center', targets = 0:3))
           ))
@@ -420,7 +425,7 @@ Again, Justin Tucker is the GOAT standing well above the rest. The following gra
 
 ```{r}
 kick_group_glmer <- kick %>% 
-  filter(kicker_player_name %in% c("J.Tucker", "N.Novak", "D.Akers", "M.Bryant")) %>% 
+  filter(kicker_player_name %in% c("J.Tucker", "N.Novak", "D.Akers", "W.Lutz")) %>% 
   group_by(kick_distance, dist_rs, kicker_player_name) %>% 
   filter(between(kick_distance, 19, 55)) %>% 
   summarise(success = mean(kick_success), n = n()) %>% 
@@ -434,6 +439,71 @@ ggplot(data = kick_group_glmer, aes(x = kick_distance)) +
   labs(color = "Probability",
        title = "Success by Kick Distance")
 ```
-Between the best (Tucker) and worst (Akers) kickers, there is a ~17% difference in expectation for a 50 yard field goal. The crazy thing is there is about the same amount of difference between Tucker and the second best kicker (Bryant), as Bryant and an average kicker (Novak).  
+Between the best (Tucker) and worst (Akers) kickers, there is a ~18% difference in expectation for a 50 yard field goal. The crazy thing is there is about the same difference between Tucker and the second best kicker (Lutz), as Lutz and an average kicker (Novak).  
   
-This type of model is applicable in the team setting when it comes to in-game decision making. A team would be able to use this model to have an accurate expectation for their specific kicker when it comes to fourth down decision making, rather than just relying on a general model.
+This type of model is applicable in the team setting when it comes to in-game decision making. A team would be able to use this model to have an accurate expectation for their specific kicker when it comes to fourth down decision making, rather than just relying on a general model.  
+  
+## Expected Points Example
+
+Let's work out an example problem in decision making using expected points and expected field goal percentage. The conversion rate and expected points for these outcomes are estimated using the dataset from `nflfastr`, however they are simplified for the sake of the example.  
+  
+Scenario:  
+  
+  * 3rd Quarter, Tie Game, 4th & 2 from the opponent's 33 yard line  
+  * Decision: Go for first down or 50 yard field goal attempt 
+    
+Outcomes:  
+  
+  * Go for it - Success  
+    + For simplicity, gain 2 yards and a first down at opponent's 31 yard line  
+    + 50% Conversion Rate  
+    + 4.0 Expected Points
+  * Go for it - Fail  
+    + No gain, opponent takes over at their own 33 yard line  
+    + (1 - Conversion Rate)  
+    + -1.5 Expected Points
+  * FGA - Success  
+    + Made FG 
+    + Kick Success Probability  
+    + 3 Expected Points
+  * FGA - Fail  
+    + Missed FG, opponent takes over at their own 40 yard line  
+    + (1 - Kick Success Probability)  
+    + -2.0 Expected Points
+ 
+The following table shows the expected points for going for a first down compared to the expected points for kicking a field goal with a certain kicker.
+ 
+```{r}
+fg_decision <- data.frame(
+  Kicker = c("-", "J.Tucker", "W.Lutz", "N.Novak", "D.Akers"),
+  Decision = c("Go For It", "FGA", "FGA", "FGA", "FGA"),
+  EP = c(.58*4 + .42*-1.5, 
+         (kick_group_glmer %>% filter(kicker_player_name == "J.Tucker" & kick_distance == 50))$prob*3 + (1 - (kick_group_glmer %>% filter(kicker_player_name == "J.Tucker" & kick_distance == 50))$prob)*-2,
+         (kick_group_glmer %>% filter(kicker_player_name == "W.Lutz" & kick_distance == 50))$prob*3 + (1 - (kick_group_glmer %>% filter(kicker_player_name == "W.Lutz" & kick_distance == 50))$prob)*-2,
+         (kick_group_glmer %>% filter(kicker_player_name == "N.Novak" & kick_distance == 50))$prob*3 + (1 - (kick_group_glmer %>% filter(kicker_player_name == "N.Novak" & kick_distance == 50))$prob)*-2,
+         (kick_group_glmer %>% filter(kicker_player_name == "D.Akers" & kick_distance == 50))$prob*3 + (1 - (kick_group_glmer %>% filter(kicker_player_name == "D.Akers" & kick_distance == 50))$prob)*-2)
+) %>% 
+  arrange(desc(EP))
+
+datatable(
+  fg_decision,
+  rownames = FALSE,
+  options = list(
+    dom = "t",
+    columnDefs = list(list(className = 'dt-center', targets = 0:2))
+  )) %>% 
+DT::formatRound("EP", digits = 2)
+```
+
+In this situation and with Justin Tucker as your kicker, you can maximize your expected points by attempting the field goal. With Will Lutz, the expected points are roughly even. With Nick Novak or David Akers, you maximize your expected points by going for the first down. This model allows you do this kind of analysis with any kicker, no matter their experience, to make an informed decision.  
+  
+One caveat, it is likely that a team would be interested in maximizing not their expected points, but their win probability. I'm not showing here whether maximizing expecting points is the optimal strategy in that regard. Even with Akers kicking, a team would have better chance of *scoring* on a field goal attempt than going for it, which may maximize a team's win probability in a tie game. The scope of that analysis is beyond this example. 
+
+## Final Remarks
+
+The final product from this analysis is two models. The first one estimates the expected probability of a field goal when we know the kick distance and some weather conditions. This is useful general analysis, and allows us to compare the previous success of kickers compared to what was expected from an average kicker using FOX. You can find the production code for this model to generate a table with xFG probabilities for all reasonable kicking conditions in `~/Production/xfg_general.R`.  
+  
+The second model included the player effect, allowing us to include the ability of the kicker in the model. This improved the accuracy of the model and would be applicable when it comes to in game decision making when a team is making a decision with a known kicker. The production code can be found at `~/Production/xfg_kicker_specific.R`, where you can generate of table of xFG probabilities for any kicker.  
+  
+
+
